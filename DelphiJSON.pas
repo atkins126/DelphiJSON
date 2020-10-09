@@ -266,15 +266,22 @@ type
     function FromJSON(value: TJSONValue): T; virtual; abstract;
   end;
 
+  TSerContext = class;
+
   /// <summary>
   /// Describes an error that happened during deserialization.
   /// </summary>
   EDJError = class(Exception)
   public
-    path: String;
+    path: TList<String>;
     errorMessage: String;
-    constructor Create(errorMessage: String; path: String);
+    constructor Create(errorMessage: String; context: TSerContext); overload;
     function Clone: EDJError; virtual;
+    destructor Destroy; override;
+    function FullPath: string;
+  private
+    constructor Create(errorMessage: String;
+      const path: TList<String>); overload;
   end;
 
   /// <summary>
@@ -312,6 +319,17 @@ type
   /// serialized.
   /// </summary>
   EDJCycleError = class(EDJError)
+  public
+    function Clone: EDJError; override;
+  end;
+
+  /// <summary>
+  /// This error is raised if a wrong format of the JSON data is provided during
+  /// deserialization.
+  /// E.g.: A DateTime string should be deserialized but does not meet the
+  /// requirement of the ISO 8601 format.
+  /// </summary>
+  EDJFormatError = class(EDJError)
   public
     function Clone: EDJError; override;
   end;
@@ -362,6 +380,24 @@ implementation
 
 uses
   System.TypInfo, System.DateUtils;
+
+function PathToString(path: TEnumerable<String>): String;
+var
+  ele: String;
+begin
+  Result := '';
+  for ele in path do
+  begin
+    if Result.Length = 0 then
+    begin
+      Result := ele;
+    end
+    else
+    begin
+      Result := Result + '>' + ele;
+    end;
+  end;
+end;
 
 function SerArray(value: TValue; context: TSerContext): TJSONArray;
 var
@@ -650,7 +686,7 @@ begin
     begin
       raise EDJError.Create
         ('Given object type is missing the JSONSerializable attribute. ',
-        context.FullPath);
+        context);
     end;
   end;
 
@@ -703,8 +739,8 @@ begin
     // check if the field name is valid
     if string.IsNullOrWhiteSpace(jsonFieldName) then
     begin
-      raise EDJError.Create('Invalid JSON field name: is null or whitespace. ',
-        context.FullPath);
+      raise EDJError.Create
+        ('Invalid JSON field name: is null or whitespace. ', context);
     end;
 
     if isRecord then
@@ -723,8 +759,8 @@ begin
     begin
       if (not nillable) and (fieldValue.AsObject = nil) then
       begin
-        raise EDJNilError.Create('Field value must not be nil, but was nil. ',
-          context.FullPath);
+        raise EDJNilError.Create
+          ('Field value must not be nil, but was nil. ', context);
       end;
     end;
 
@@ -770,8 +806,8 @@ begin
     // check if the object was already / is in the process of being serialized
     if context.IsTracked(value.AsObject) then
     begin
-      raise EDJCycleError.Create('A cycle was detected during serialization!',
-        context.FullPath);
+      raise EDJCycleError.Create
+        ('A cycle was detected during serialization!', context);
     end;
     context.Track(value.AsObject);
   end;
@@ -823,8 +859,7 @@ begin
   end
   else
   begin
-    raise EDJError.Create('Type not supported for serialization. ',
-      context.FullPath);
+    raise EDJError.Create('Type not supported for serialization. ', context);
   end;
 end;
 
@@ -965,8 +1000,8 @@ begin
 
   if selectedMethod = nil then
   begin
-    raise EDJError.Create('Did not find a suitable constructor for type. ',
-      context.FullPath);
+    raise EDJError.Create
+      ('Did not find a suitable constructor for type. ', context);
   end;
 
   Result := selectedMethod.Invoke(objType.MetaclassType, params);
@@ -1002,7 +1037,7 @@ begin
     begin
       raise EDJWrongArraySizeError.Create
         ('Element count of the given JSON array does not match the size of a static array. ',
-        context.FullPath);
+        context);
     end;
 
     SetLength(res, value.Count);
@@ -1078,7 +1113,7 @@ var
 begin
   if not(value is TJSONObject) then
   begin
-    raise EDJError.Create('Expected a JSON object. ', context.FullPath);
+    raise EDJError.Create('Expected a JSON object. ', context);
   end;
   jsonObject := value as TJSONObject;
 
@@ -1129,7 +1164,7 @@ var
 begin
   if not(value is TJSONArray) then
   begin
-    raise EDJError.Create('Expected a JSON array. ', context.FullPath);
+    raise EDJError.Create('Expected a JSON array. ', context);
   end;
   jsonArray := value as TJSONArray;
 
@@ -1151,22 +1186,20 @@ begin
     // split up array entry into key and value and check if this went fine
     if not(jArrValue is TJSONObject) then
     begin
-      raise EDJError.Create('Expected a JSON object. ', context.FullPath);
+      raise EDJError.Create('Expected a JSON object. ', context);
     end;
     jArrObject := jArrValue as TJSONObject;
 
     jsonKey := jArrObject.GetValue('key');
     if jsonKey = nil then
     begin
-      raise EDJError.Create('Expected a field with name "key". ',
-        context.FullPath);
+      raise EDJError.Create('Expected a field with name "key". ', context);
     end;
 
     JsonValue := jArrObject.GetValue('value');
     if jsonKey = nil then
     begin
-      raise EDJError.Create('Expected a field with name "value". ',
-        context.FullPath);
+      raise EDJError.Create('Expected a field with name "value". ', context);
     end;
 
     // deserialize key and value
@@ -1201,22 +1234,20 @@ var
 begin
   if not(value is TJSONObject) then
   begin
-    raise EDJError.Create('Expected a JSON object. ', context.FullPath);
+    raise EDJError.Create('Expected a JSON object. ', context);
   end;
   jsonObject := value as TJSONObject;
 
   jsonKey := jsonObject.GetValue('key');
   if jsonKey = nil then
   begin
-    raise EDJError.Create('Expected a field with name "key". ',
-      context.FullPath);
+    raise EDJError.Create('Expected a field with name "key". ', context);
   end;
 
   JsonValue := jsonObject.GetValue('value');
   if jsonKey = nil then
   begin
-    raise EDJError.Create('Expected a field with name "value". ',
-      context.FullPath);
+    raise EDJError.Create('Expected a field with name "value". ', context);
   end;
 
   // create pair
@@ -1254,7 +1285,7 @@ var
 begin
   if not(value is TJSONArray) then
   begin
-    raise EDJError.Create('Expected a JSON array. ', context.FullPath);
+    raise EDJError.Create('Expected a JSON array. ', context);
   end;
   jsonArray := value as TJSONArray;
 
@@ -1273,8 +1304,7 @@ begin
   if addMethod = nil then
   begin
     raise EDJError.Create
-      ('Could not find a method to add items to the object. ',
-      context.FullPath);
+      ('Could not find a method to add items to the object. ', context);
   end;
   ElementType := addMethod.GetParameters[0].ParamType;
 
@@ -1302,12 +1332,22 @@ begin
 
   if not(value is TJSONString) then
   begin
-    raise EDJError.Create('Expected a JSON string in date time format. ',
-      context.FullPath);
+    raise EDJError.Create
+      ('Expected a JSON string in date time ISO 8601 format.', context);
   end;
   jStr := value as TJSONString;
   str := jStr.value;
-  dt := ISO8601ToDate(str, context.settings.DateTimeReturnUTC);
+  try
+    dt := ISO8601ToDate(str, context.settings.DateTimeReturnUTC);
+  except
+    on E: Exception do
+    begin
+      raise EDJFormatError.Create
+        ('Invalid DateTime format was provided. Expected an ISO 8601 ' +
+        'formatted string.', context);
+    end;
+  end;
+
   objOut := TValue.From(dt);
 end;
 
@@ -1399,7 +1439,7 @@ begin
   // check if this is a json object
   if not(value is TJSONObject) then
   begin
-    raise EDJError.Create('Expected a JSON Object. ', context.FullPath);
+    raise EDJError.Create('Expected a JSON Object. ', context);
   end;
   jsonObject := value as TJSONObject;
 
@@ -1421,7 +1461,7 @@ begin
     begin
       raise EDJError.Create
         ('Given object type is missing the JSONSerializable attribute. ',
-        context.FullPath);
+        context);
     end;
   end;
 
@@ -1484,8 +1524,8 @@ begin
     // check if the field name is valid
     if string.IsNullOrWhiteSpace(jsonFieldName) then
     begin
-      raise EDJError.Create('Invalid JSON field name: is null or whitespace. ',
-        context.FullPath);
+      raise EDJError.Create
+        ('Invalid JSON field name: is null or whitespace. ', context);
     end;
 
     // check if the field name exists in the json structure
@@ -1497,7 +1537,7 @@ begin
       if JsonValue = nil then
       begin
         raise EDJRequiredError.Create('Value with name "' + jsonFieldName +
-          '" missing in JSON data. ', context.FullPath);
+          '" missing in JSON data. ', context);
       end;
     end
     else
@@ -1537,9 +1577,10 @@ begin
     begin
       if not nillable then
       begin
+        context.PushPath(jsonFieldName);
         raise EDJNilError.Create
           ('Field value must not be nil, but JSON was null for field with name "'
-          + jsonFieldName + '". ', context.FullPath);
+          + jsonFieldName + '". ', context);
       end
       else if nilIsDefault then
       begin
@@ -1571,7 +1612,7 @@ begin
         begin
           raise EDJError.Create
             ('Field should use a default value if JSON was null, but no default value attribute was defined for field with name "'
-            + jsonFieldName + '". ', context.FullPath);
+            + jsonFieldName + '". ', context);
         end;
       end;
     end;
@@ -1629,7 +1670,7 @@ begin
   begin
     if not(value is TJSONArray) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end;
     Result := DerArray(value as TJSONArray, dataType, context);
   end
@@ -1637,7 +1678,7 @@ begin
   begin
     if not(value is TJSONArray) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end;
     Result := DerArray(value as TJSONArray, dataType, context);
   end
@@ -1645,7 +1686,7 @@ begin
   begin
     if not(value is TJSONBool) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end;
     Result := DerBool(value as TJSONBool, dataType, context);
   end
@@ -1653,7 +1694,7 @@ begin
   begin
     if not(value is TJSONNumber) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end;
     Result := DerNumber(value as TJSONNumber, dataType, context);
   end
@@ -1661,7 +1702,7 @@ begin
   begin
     if not(value is TJSONNumber) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end;
     Result := DerNumber(value as TJSONNumber, dataType, context);
   end
@@ -1669,7 +1710,7 @@ begin
   begin
     if not(value is TJSONNumber) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end;
     Result := DerNumber(value as TJSONNumber, dataType, context);
   end
@@ -1677,7 +1718,7 @@ begin
   begin
     if not(value is TJSONString) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end;
     Result := DerString(value as TJSONString, dataType, context);
   end
@@ -1685,7 +1726,7 @@ begin
   begin
     if not(value is TJSONString) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end;
     Result := DerString(value as TJSONString, dataType, context);
   end
@@ -1693,7 +1734,7 @@ begin
   begin
     if not(value is TJSONString) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end;
     Result := DerString(value as TJSONString, dataType, context);
   end
@@ -1701,7 +1742,7 @@ begin
   begin
     if not(value is TJSONString) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end;
     Result := DerString(value as TJSONString, dataType, context);
   end
@@ -1713,7 +1754,7 @@ begin
     end
     else if not(value is TJSONObject) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end
     else
     begin
@@ -1724,12 +1765,12 @@ begin
   begin
     if value is TJSONNull then
     begin
-      raise EDJError.Create('Record type can not be null. ', context.FullPath);
+      raise EDJError.Create('Record type can not be null. ', context);
     end;
 
     if not(value is TJSONObject) then
     begin
-      raise EDJError.Create(typeMismatch, context.FullPath);
+      raise EDJError.Create(typeMismatch, context);
     end;
 
     Result := DerObject(value as TJSONObject, dataType, context, true);
@@ -1738,16 +1779,18 @@ begin
   else
   begin
     raise EDJError.Create
-      ('Type of field is not supported for deserialization. ',
-      context.FullPath);
+      ('Type of field is not supported for deserialization. ', context);
   end;
 end;
 
 { DelphiJSON<T> }
 
 constructor DelphiJSON<T>.Create;
+var
+  tmp: TSerContext;
 begin
-  raise EDJError.Create('Do not create instances of this object!', '');
+  tmp := nil;
+  raise EDJError.Create('Do not create instances of this object!', tmp);
 end;
 
 class function DelphiJSON<T>.Deserialize(data: String;
@@ -1760,10 +1803,10 @@ begin
     val := TJSONObject.ParseJSONValue(data, true, true);
     Result := DeserializeJ(val, settings);
   except
-    on e: EDJError do
+    on E: EDJError do
     begin
       val.Free;
-      raise e.Clone;
+      raise E.Clone;
     end;
   end;
   val.Free;
@@ -1791,12 +1834,12 @@ begin
     rttiType := context.RTTI.GetType(System.TypeInfo(T));
     res := DeserializeInternal(data, rttiType, context);
   except
-    on e: EDJError do
+    on E: EDJError do
     begin
       context.FreeAllHeapObjects;
       context.Free;
       createdSettings.Free;
-      raise e.Clone;
+      raise E.Clone;
     end;
   end;
 
@@ -1814,10 +1857,10 @@ begin
     JsonValue := SerializeJ(data, settings);
     Result := JsonValue.ToJSON;
   except
-    on e: EDJError do
+    on E: EDJError do
     begin
       JsonValue.Free;
-      raise e.Clone
+      raise E.Clone
     end;
   end;
   JsonValue.Free;
@@ -1844,12 +1887,12 @@ begin
     valueObject := TValue.From<T>(data);
     Result := SerializeInternal(valueObject, context);
   except
-    on e: EDJError do
+    on E: EDJError do
     begin
       context.FreeAllHeapObjects;
       context.Free;
       createdSettings.Free;
-      raise e.Clone
+      raise E.Clone
     end;
   end;
 
@@ -1919,14 +1962,8 @@ begin
 end;
 
 function TSerContext.FullPath: string;
-var
-  ele: string;
 begin
-  Result := '';
-  for ele in path do
-  begin
-    Result := Result + '>' + ele;
-  end;
+  Result := PathToString(path);
 end;
 
 function TSerContext.IsTracked(obj: TObject): Boolean;
@@ -2108,11 +2145,39 @@ begin
   Result := EDJError.Create(self.errorMessage, self.path);
 end;
 
-constructor EDJError.Create(errorMessage, path: String);
+constructor EDJError.Create(errorMessage: String; const path: TList<String>);
 begin
-  inherited Create(errorMessage + ' - ' + path);
+  inherited Create(errorMessage + ' - ' + PathToString(path));
   self.errorMessage := errorMessage;
-  self.path := path;
+  self.path := TList<String>.Create(path);
+end;
+
+constructor EDJError.Create(errorMessage: String; context: TSerContext);
+begin
+  if context <> nil then
+  begin
+    inherited Create(errorMessage + ' - ' + context.FullPath);
+    self.errorMessage := errorMessage;
+    self.path := TList<String>.Create(context.path);
+  end
+  else
+  begin
+    inherited Create(errorMessage);
+    self.errorMessage := errorMessage;
+    self.path := nil;
+  end;
+end;
+
+destructor EDJError.Destroy;
+begin
+  self.path.Free;
+  self.path := nil;
+  inherited;
+end;
+
+function EDJError.FullPath: string;
+begin
+  Result := PathToString(path);
 end;
 
 { DJConverterAttribute<T> }
@@ -2153,6 +2218,13 @@ end;
 function EDJCycleError.Clone: EDJError;
 begin
   Result := EDJCycleError.Create(self.errorMessage, self.path);
+end;
+
+{ EDJFormatError }
+
+function EDJFormatError.Clone: EDJError;
+begin
+  Result := EDJFormatError.Create(self.errorMessage, self.path);
 end;
 
 end.
